@@ -1,12 +1,10 @@
-#Read antenna signal and apply noise
-import numpy as np
+mport numpy as np
 import scipy.signal
 import scipy.fftpack
 import math
 import random
 import matplotlib.pyplot as plt
 import tensorflow as tf
-import keras
 import os
 
 #function to convert CGS to SI of the electrin field
@@ -19,6 +17,8 @@ def to_ns(t):
 	t_ns = t*100000000
 	return t_ns 
 
+#function to filter the signal with the natena response
+#GRAND case 50Mhz to 200Mhz
 #FFT BANDPASS
 def filter_frequency(s,t,f_min,f_max):
 	y_fft = scipy.fftpack.fft(s)
@@ -33,12 +33,16 @@ def filter_frequency(s,t,f_min,f_max):
 	
 	return cut_signal 
 
+#function to add noise to input signal and filter the signal with the antena response
+#input is the index of raw_antena<index>.dat
+#output is the filtered in bandpass signal, filtered in bandpass with noise and time
 def pre_process_signal(index):
 	#signal
 	filename_dat = 'raw_antena' + str(index) + '.dat' 
 	t, x, y, z = np.loadtxt(filename_dat, delimiter ='\t', usecols =(0, 1, 2, 3), unpack = True)
 	
-	#noise
+	#noise 
+	#GRAND antena is 15uV
 	mu, sigma = 0, 15
 
 	# creating a noise with the same dimension as the dataset
@@ -46,6 +50,7 @@ def pre_process_signal(index):
 	noise_addy = np.random.normal(mu, sigma, y.size)
 	noise_addz = np.random.normal(mu, sigma, z.size)
 
+	#Gaussian noise
 	signalx = filter_frequency(to_SI(x) + noise_addx,t,50,200)
 	signaly = filter_frequency(to_SI(y) + noise_addy,t,50,200)
 	signalz = filter_frequency(to_SI(z) + noise_addz,t,50,200)
@@ -68,14 +73,18 @@ def pre_process_signal(index):
 
 i=raw_input("Antenna number: ")
 
+#retrieve signal 
 signal_with_noise,signal_without_noise,t = pre_process_signal(i)
 
-inputX = np.asmatrix(signal_with_noise.real)
-inputY = np.asmatrix(signal_without_noise.real)
+#convert to NN input type
+inputX = np.asmatrix(signal_with_noise)
+inputY = np.asmatrix(signal_without_noise)
 
+#reshape in order to train using each trace individually
 inputX = inputX.reshape(300,2082)
 inputY = inputY.reshape(300,2082)
 
+#percetage of data that will be trained
 train_size = 1
 
 train_cnt = int(np.floor(inputX.shape[0] * train_size))
@@ -84,6 +93,7 @@ y_train = inputY[:train_cnt]
 x_test = inputX[train_cnt:]
 y_test = inputY[train_cnt:]
 
+#define the NEURAL NETWORK
 def multilayer_perceptron(x, weights, biases):
     layer_1 = tf.add(tf.matmul(x, weights['h1']), biases['b1'])
     layer_1 = tf.nn.sigmoid(layer_1)
@@ -91,10 +101,12 @@ def multilayer_perceptron(x, weights, biases):
     out_layer = tf.matmul(layer_1, weights['out']) + biases['out']
     return out_layer
 
+#number of hidden layer
 n_hidden_1 = 5
 n_input = x_train.shape[1]
 n_classes = y_train.shape[1]
 
+#weights and biases
 weights = {
     'h1': tf.Variable(tf.random_normal([n_input, n_hidden_1])),
     'out': tf.Variable(tf.random_normal([n_hidden_1, n_classes]))
@@ -105,10 +117,7 @@ biases = {
     'out': tf.Variable(tf.random_normal([n_classes]))
 }
 
-keep_prob = tf.placeholder("float")
-
-training_epochs = x_train.shape[1]
-
+#Neural Net training
 x = tf.placeholder("float", [None, n_input])
 y = tf.placeholder("float", [None, n_input])
 
@@ -127,7 +136,7 @@ with tf.Session() as sess:
 		sess.run(train, feed_dict={x: x_train[step], y: y_train[step]})
 	result = sess.run([weights,biases])
 
-#weights and bias
+#output weights and bias
 w = result[0]
 b = result[1]
 
@@ -144,17 +153,7 @@ def crc(a,b):
 	c = np.correlate(a, b, 'full')
 	return c
 	
-#teste on new shower
-snr_nn=[]
-snr_wf=[]
-
-crc_nn=[]
-crc_wf=[]
-
-antenas =[]
-
-#for i in range(1,301):
-	
+#test on new shower
 i=raw_input("Validate antenna number: ")
 
 signal_with_noise,signal_without_noise,t = pre_process_signal(i)
@@ -176,20 +175,13 @@ nn_filter = results2.flatten()
 #Wiener Fiter
 wiener_signal = scipy.signal.wiener(signal_with_noise.real)
 
-snr_nn.append(snr(signal_without_noise,nn_filter))
-snr_wf.append(snr(signal_without_noise,wiener_signal))
-crc_nn.append(crc(signal_without_noise,nn_filter)[0])
-crc_wf.append(crc(signal_without_noise,wiener_signal)[0])
-antenas.append(i)
-
 print "Neural network filter SNR: ", snr_nn
 print "Wiener filter SNR: ", snr_wf
 
 print "Neural network filter cross correlation: ", crc_nn
 print "Wiener filter cross correlation: ", crc_wf
 
-print i
-
+#Plots
 plt.subplot(2,2,1)
 plt.plot(to_ns(t),signal_without_noise)
 plt.title('Filtered signal')
@@ -215,21 +207,3 @@ title = 'Antena' + str(i)
 plt.savefig(title + 'nn_wf.png')
 
 plt.show()
-
-
-'''plt.subplot(1,2,1)
-plt.plot(antenas,snr_nn,'.-',label='NN')
-plt.plot(antenas,snr_wf,'.-',label='WF')
-plt.title('SNR')
-plt.ylabel('SNR')
-
-ax = plt.subplot(1,2,2)
-plt.plot(antenas,crc_nn,'.-',label='NN')
-plt.plot(antenas,crc_wf,'.-',label='WF')
-plt.title('Cross correlation')
-plt.ylabel('Cross correlation')
-ax.set_yscale('log')
-
-plt.legend()
-plt.show()
-'''
